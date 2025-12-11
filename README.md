@@ -1,5 +1,5 @@
 # UNIGHT LOCAL AI SERVER FOR PHONE
-[unight logo](/long-logo-white.png)
+![unight logo](/long-logo-white.png)
 
 ## Quick Start
 

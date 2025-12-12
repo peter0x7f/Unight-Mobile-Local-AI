@@ -48,9 +48,18 @@ async function setupUser() {
         process.exit(1);
     }
 
-    const password = await question('Enter password: ');
-    if (!password || password.length < 3) {
-        console.error('Error: Password must be at least 3 characters');
+    const password = await question('Enter password (min 6 chars, A-Z, a-z, 0-9, special): ');
+    
+    // Password Policy: Min 6 chars, 1 upper, 1 lower, 1 number, 1 special
+    const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{6,}$/;
+
+    if (!strongPasswordRegex.test(password)) {
+        console.error('\nError: Password does not meet security requirements:');
+        console.error(' - At least 6 characters');
+        console.error(' - At least one uppercase letter');
+        console.error(' - At least one lowercase letter');
+        console.error(' - At least one number');
+        console.error(' - At least one special character');
         process.exit(1);
     }
 

@@ -9,7 +9,17 @@
 npm install
 ```
 
-### 2. Install Cloudflare Tunnel (cloudflared)
+### 2. Install Ollama
+
+**Download & Install:**
+Visit [ollama.com](https://ollama.com) and download the installer for your OS.
+
+**Verify installation:**
+```bash
+ollama --version
+```
+
+### 3. Install Cloudflare Tunnel (cloudflared)
 
 **Windows:**
 ```powershell
@@ -28,7 +38,7 @@ Verify installation:
 cloudflared --version
 ```
 
-### 3. Start Rowan Node
+### 4. Start Rowan Node
 
 This single command will:
 - Prompt for username/password (first time only)

@@ -12,7 +12,7 @@ const modelConfig = require('./models_config');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 
 // Initialize DB
 db.init();
@@ -178,19 +178,13 @@ app.post('/api/chat', async (req, res) => {
             content: msg.content
         }));
 
-        // 3. Determine Routing
+        // 3. Determine Routing (Ollama-only)
         let routeConfig = null;
-        let routeType = null;
 
         if (modelConfig.ollama[requestedModel]) {
-            routeType = 'ollama';
             routeConfig = modelConfig.ollama[requestedModel];
-        } else if (modelConfig.huggingface[requestedModel]) {
-            routeType = 'huggingface';
-            routeConfig = modelConfig.huggingface[requestedModel];
         } else {
-            // Fallback
-            routeType = 'ollama';
+            // Fallback to direct Ollama model name
             routeConfig = { ollama: requestedModel, max_tokens: 2048 };
         }
 
@@ -218,93 +212,37 @@ app.post('/api/chat', async (req, res) => {
 
         let replyContent = '';
 
-        if (routeType === 'ollama') {
-            // Apply system prompt logic
-            let messagesWithSystem = applySystemPrompt(messages, systemPromptToUse);
+        // Apply system prompt logic
+        let messagesWithSystem = applySystemPrompt(messages, systemPromptToUse);
 
-            // Force English for DeepSeek
-            if (routeConfig.force_english) {
-                messagesWithSystem.unshift({
-                    role: 'system',
-                    content: 'You are an assistant. Always reply in English.'
-                });
-            }
-
-            const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    model: routeConfig.ollama,
-                    messages: messagesWithSystem,
-                    stream: false,
-                    options: {
-                        num_predict: routeConfig.max_tokens || 2048,
-                        temperature: 0.7
-                    }
-                })
+        // Force English for DeepSeek
+        if (routeConfig.force_english) {
+            messagesWithSystem.unshift({
+                role: 'system',
+                content: 'You are an assistant. Always reply in English.'
             });
-
-            if (!response.ok) {
-                throw new Error(`Ollama API error: ${response.statusText}`);
-            }
-
-            const data = await response.json();
-            replyContent = data.message.content;
-
-        } else if (routeType === 'huggingface') {
-            // Use Python inference script
-            const { exec } = require('child_process');
-            const util = require('util');
-            const execPromise = util.promisify(exec);
-
-            let hfMessages = messages;
-            if (systemPromptToUse) {
-                hfMessages = applySystemPrompt(messages, systemPromptToUse);
-            }
-
-            const prompt = hfMessages.map(m => {
-                if (m.role === 'system') return `System: ${m.content}`;
-                if (m.role === 'user') return `User: ${m.content}`;
-                if (m.role === 'assistant') return `Assistant: ${m.content}`;
-                return m.content;
-            }).join('\n') + '\nAssistant:';
-
-            const cacheDir = process.env.MODELS_CACHE || './models_cache';
-            const modelRepo = routeConfig.hf_repo;
-            const modelCachePath = path.join(cacheDir, 'models--' + modelRepo.replace('/', '--'));
-
-            if (!fs.existsSync(modelCachePath)) {
-                return res.status(400).json({
-                    error: 'HuggingFace model not downloaded',
-                    hint: `Use POST /api/models/download-hf with name="${requestedModel}" first`
-                });
-            }
-
-            const isWindows = process.platform === 'win32';
-            const pythonCmd = fs.existsSync('./venv')
-                ? (isWindows ? '.\\venv\\Scripts\\python.exe' : './venv/bin/python')
-                : 'python';
-
-            const maxTokens = routeConfig.max_tokens || 256;
-            const modelType = routeConfig.type || 'causal';
-            const device = routeConfig.device || 'cpu';
-
-            try {
-                const cmd = `${pythonCmd} infer_hf_model.py "${modelCachePath}" "${prompt.replace(/"/g, '\\"')}" --model-type ${modelType} --max-tokens ${maxTokens} --device ${device}`;
-                console.log(`Running HF inference for ${requestedModel}...`);
-                const { stdout } = await execPromise(cmd, { timeout: 120000 });
-                const result = JSON.parse(stdout);
-                if (!result.success) throw new Error(result.error);
-                replyContent = result.response;
-                console.log(`HF inference complete`);
-            } catch (error) {
-                console.error('HF Inference Error:', error);
-                return res.status(500).json({
-                    error: 'HuggingFace inference failed',
-                    details: error.message
-                });
-            }
         }
+
+        const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: routeConfig.ollama,
+                messages: messagesWithSystem,
+                stream: false,
+                options: {
+                    num_predict: routeConfig.max_tokens || 2048,
+                    temperature: 0.7
+                }
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Ollama API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        replyContent = data.message.content;
 
         // 4. Save Assistant Message
         const assistantMsg = db.createMessage(conversation_id, req.user.id, 'assistant', replyContent);
@@ -325,7 +263,11 @@ app.post('/api/chat', async (req, res) => {
 
     } catch (err) {
         console.error('Chat Error:', err);
-        res.status(500).json({ error: 'Failed to process chat message' });
+        console.error('Stack:', err.stack);
+        res.status(500).json({
+            error: 'Failed to process chat message',
+            details: err.message
+        });
     }
 });
 

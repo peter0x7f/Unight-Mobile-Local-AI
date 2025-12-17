@@ -60,11 +60,12 @@ function getAllUsers() {
 }
 
 // Conversation Helpers
-function createConversation(id, userId, title) {
-    const stmt = db.prepare('INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)');
-    stmt.run(id, userId, title);
+function createConversation(id, userId, title, agent_id) {
+    const stmt = db.prepare('INSERT INTO conversations (id, user_id, title, agent_id) VALUES (?, ?, ?, ?)');
+    stmt.run(id, userId, title, agent_id);
     return getConversationById(id);
 }
+
 
 function getConversationById(id) {
     const stmt = db.prepare('SELECT * FROM conversations WHERE id = ?');

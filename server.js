@@ -70,28 +70,35 @@ async function generateEmbedding(text) {
 
 app.post('/auth/login', async (req, res) => {
     const { username, password } = req.body;
+    console.log('[LOGIN] Attempt:', { username, passwordProvided: !!password });
+
     if (!username || !password) {
+        console.log('[LOGIN] Missing credentials');
         return res.status(400).json({ error: 'Username and password required' });
     }
 
     try {
         const user = db.getUserByUsername(username);
         if (!user) {
+            console.log('[LOGIN] User not found:', username);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const valid = await auth.comparePassword(password, user.password_hash);
         if (!valid) {
+            console.log('[LOGIN] Invalid password for user:', username);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const token = auth.signToken(user);
+        console.log('[LOGIN] Success for user:', username);
         res.json({ user: { id: user.id, username: user.username }, token });
     } catch (err) {
-        console.error(err);
+        console.error('[LOGIN] Error:', err);
         res.status(500).json({ error: 'Server error' });
     }
 });
+
 
 // --- Public Routes ---
 
@@ -103,18 +110,67 @@ app.get('/health', (req, res) => {
 
 app.use('/api', auth.requireAuth);
 
-// Conversations
-app.post('/api/conversations', (req, res) => {
-    const { title } = req.body;
+// Agents
+app.post('/api/agents', (req, res) => {
+    const { name, type } = req.body;
+    if (!name) {
+        return res.status(400).json({ error: 'Name is required' });
+    }
     const id = uuidv4();
     try {
-        const conversation = db.createConversation(id, req.user.id, title || null);
+        const agent = db.createAgent(id, req.user.id, name, type || 'orchestrator');
+        res.json(agent);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to create agent' });
+    }
+});
+
+app.get('/api/agents', (req, res) => {
+    try {
+        const agents = db.getAgentsForUser(req.user.id);
+        res.json(agents);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to fetch agents' });
+    }
+});
+
+app.get('/api/agents/:id', (req, res) => {
+    const { id } = req.params;
+    try {
+        const agent = db.getAgentById(id);
+        if (!agent || agent.user_id !== req.user.id) {
+            return res.status(404).json({ error: 'Agent not found' });
+        }
+        res.json(agent);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to fetch agent' });
+    }
+});
+
+// Conversations
+app.post('/api/conversations', (req, res) => {
+    const { title, agent_id } = req.body;
+    const id = uuidv4();
+
+    if (agent_id) {
+        const agent = db.getAgentById(agent_id);
+        if (!agent || agent.user_id !== req.user.id) {
+            return res.status(400).json({ error: 'Invalid agent_id' });
+        }
+    }
+
+    try {
+        const conversation = db.createConversation(id, req.user.id, title || null, agent_id);
         res.json(conversation);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to create conversation' });
     }
 });
+
 
 app.get('/api/conversations', (req, res) => {
     try {

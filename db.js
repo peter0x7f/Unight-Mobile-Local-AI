@@ -19,8 +19,23 @@ function init() {
         db.exec(migration2);
     }
 
+    // Run Agents Migration
+    const migrationPath3 = path.join(__dirname, 'migrations', '003_add_agents.sql');
+    if (fs.existsSync(migrationPath3)) {
+        try {
+            const migration3 = fs.readFileSync(migrationPath3, 'utf8');
+            db.exec(migration3);
+        } catch (err) {
+            // Ignore duplicate column errors (migration already run)
+            if (!err.message.includes('duplicate column')) {
+                throw err;
+            }
+        }
+    }
+
     console.log('Database initialized and migrations run.');
 }
+
 
 // User Helpers
 function createUser(username, passwordHash) {
@@ -65,6 +80,29 @@ function updateConversationTimestamp(id) {
     const stmt = db.prepare('UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?');
     stmt.run(id);
 }
+
+// Agent Helpers
+function createAgent(id, userId, name, type = 'orchestrator') {
+    const stmt = db.prepare('INSERT INTO agents (id, user_id, name, type) VALUES (?, ?, ?, ?)');
+    stmt.run(id, userId, name, type);
+    return getAgentById(id);
+}
+
+function getAgentById(id) {
+    const stmt = db.prepare('SELECT * FROM agents WHERE id = ?');
+    return stmt.get(id);
+}
+
+function getAgentsForUser(userId) {
+    const stmt = db.prepare('SELECT * FROM agents WHERE user_id = ? ORDER BY created_at ASC');
+    return stmt.all(userId);
+}
+
+function updateAgentTimestamp(id) {
+    const stmt = db.prepare('UPDATE agents SET updated_at = CURRENT_TIMESTAMP WHERE id = ?');
+    stmt.run(id);
+}
+
 
 // Message Helpers
 function createMessage(conversationId, userId, role, content) {
@@ -150,6 +188,10 @@ module.exports = {
     getConversationById,
     getConversationsForUser,
     updateConversationTimestamp,
+    createAgent,
+    getAgentById,
+    getAgentsForUser,
+    updateAgentTimestamp,
     createMessage,
     getMessagesForConversation,
     storeEmbedding,
@@ -157,3 +199,4 @@ module.exports = {
     getEmbeddingsForConversation,
     searchSimilarMessages
 };
+

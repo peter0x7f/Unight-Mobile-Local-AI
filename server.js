@@ -17,37 +17,11 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434';
 // Initialize DB
 db.init();
 
-// Check embedding model availability
-checkEmbeddingModel();
-
 // Middleware
 app.use(cors());
 app.use(express.json());
 
 // --- Helper Functions (Logic from LocalModelService) ---
-
-// Check if embedding model is available
-let embeddingModelAvailable = false;
-const EMBEDDING_MODEL = 'nomic-embed-text';
-
-async function checkEmbeddingModel() {
-    try {
-        const response = await fetch(`${OLLAMA_URL}/api/tags`);
-        if (response.ok) {
-            const data = await response.json();
-            embeddingModelAvailable = data.models.some(m => m.name.includes('nomic-embed-text'));
-
-            if (!embeddingModelAvailable) {
-                console.log('\n⚠️  Embedding model not found. RAG/long-term memory features disabled.');
-                console.log(`   To enable, run: ollama pull ${EMBEDDING_MODEL}\n`);
-            } else {
-                console.log('✓ Embedding model available - RAG enabled');
-            }
-        }
-    } catch (err) {
-        console.warn('Unable to check embedding model availability:', err.message);
-    }
-}
 
 function applySystemPrompt(messages, systemPrompt) {
     if (!systemPrompt) return messages;
@@ -70,17 +44,12 @@ function applySystemPrompt(messages, systemPrompt) {
 }
 
 async function generateEmbedding(text) {
-    // Skip if embedding model not available
-    if (!embeddingModelAvailable) {
-        return null;
-    }
-
     try {
         const response = await fetch(`${OLLAMA_URL}/api/embeddings`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: EMBEDDING_MODEL,
+                model: 'nomic-embed-text',
                 prompt: text
             })
         });

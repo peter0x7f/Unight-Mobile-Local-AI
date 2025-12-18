@@ -157,6 +157,7 @@ function getAllEmbeddings() {
 
 // Vector Search (Cosine Similarity)
 function searchSimilarMessages(queryEmbedding, limit = 5) {
+    const start = Date.now();
     const allEmbeddings = getAllEmbeddings();
 
     // Calculate Cosine Similarity
@@ -167,6 +168,9 @@ function searchSimilarMessages(queryEmbedding, limit = 5) {
 
     // Sort by similarity desc
     scored.sort((a, b) => b.similarity - a.similarity);
+
+    const end = Date.now();
+    console.log(`[RAG] Search took ${end - start}ms for ${allEmbeddings.length} embeddings.`);
 
     return scored.slice(0, limit);
 }

@@ -1,8 +1,9 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
@@ -324,6 +325,196 @@ app.post('/api/chat', async (req, res) => {
             error: 'Failed to process chat message',
             details: err.message
         });
+    }
+});
+
+
+// Streaming chat endpoint
+app.post('/api/chat/stream', async (req, res) => {
+    const { conversation_id, message, model } = req.body;
+
+    // Setup NDJSON headers
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    let closed = false;
+    res.on('close', () => {
+        console.log('[STREAM] Response connection closed');
+        closed = true;
+    });
+
+    const writeFrame = async (obj) => {
+        if (closed) return;
+        const ok = res.write(JSON.stringify(obj) + '\n');
+        if (!ok) await new Promise((r) => res.once('drain', r));
+    };
+
+    if (!conversation_id || !message) {
+        await writeFrame({ type: 'error', code: 'MISSING_FIELDS', message: 'Required fields missing' });
+        res.end();
+        return;
+    }
+
+    await writeFrame({ type: 'start', conversation_id, ts: Date.now() });
+
+    try {
+        const requestedModel = model || process.env.ROWAN_MODEL || 'llama3.2-latest';
+        const conversation = db.getConversationById(conversation_id);
+
+        if (!conversation || conversation.user_id !== req.user.id) {
+            await writeFrame({ type: 'error', code: 'NOT_FOUND', message: 'Conversation not found' });
+            res.end();
+            return;
+        }
+
+        const userMsg = db.createMessage(conversation_id, req.user.id, 'user', message);
+        generateEmbedding(message).then(emb => {
+            if (emb) db.storeEmbedding(userMsg.id, emb);
+        });
+
+        const history = db.getMessagesForConversation(conversation_id, 20);
+        let messages = history.map(m => ({ role: m.role, content: m.content }));
+
+        let routeConfig = modelConfig.ollama[requestedModel] || { ollama: requestedModel, max_tokens: 2048 };
+
+        // RAG
+        let contextText = '';
+        try {
+            const queryEmb = await generateEmbedding(message);
+            if (queryEmb) {
+                const similar = db.searchSimilarMessages(queryEmb, 3); // Reduced from 5
+                const relevant = similar.filter(m => m.conversation_id !== conversation_id && m.similarity > 0.7); // Increased from 0.5
+                if (relevant.length > 0) {
+                    contextText = relevant.map(m => {
+                        const truncated = m.content.length > 200 ? m.content.substring(0, 200) + '...' : m.content;
+                        return `[Past ${m.role}]: ${truncated}`;
+                    }).join('\n');
+                    console.log('[STREAM] RAG: Using', relevant.length, 'memories, context length:', contextText.length);
+                }
+            }
+        } catch (e) {
+            console.error('[RAG] Error:', e.message);
+        }
+
+        let systemPrompt = contextText ?
+            `You are a helpful assistant with long-term memory.\n\nRelevant Past Memories:\n${contextText}\n\nAnswer using these memories if relevant.` : null;
+
+        let messagesWithSystem = applySystemPrompt(messages, systemPrompt);
+        if (routeConfig.force_english) {
+            messagesWithSystem.unshift({ role: 'system', content: 'Always reply in English.' });
+        }
+
+        // Make streaming request to Ollama using native http
+        console.log('[STREAM] Preparing Ollama request...');
+        const ollamaUrl = new URL(OLLAMA_URL);
+        console.log('[STREAM] Ollama URL:', ollamaUrl.href);
+        const requestBody = JSON.stringify({
+            model: routeConfig.ollama,
+            messages: messagesWithSystem,
+            stream: true,
+            options: { num_predict: routeConfig.max_tokens || 2048, temperature: 0.7 }
+        });
+        console.log('[STREAM] Request body size:', requestBody.length);
+
+        console.log('[STREAM] Creating http request...');
+        const ollamaReq = http.request({
+            hostname: ollamaUrl.hostname,
+            port: ollamaUrl.port || 11434,
+            path: '/api/chat',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(requestBody)
+            }
+        }, (ollamaRes) => {
+            console.log('[STREAM] Ollama response received, status:', ollamaRes.statusCode);
+            if (ollamaRes.statusCode !== 200) {
+                console.error('[STREAM] Ollama error:', ollamaRes.statusCode);
+                writeFrame({ type: 'error', code: 'OLLAMA_ERROR', message: 'Ollama request failed' }).then(() => res.end());
+                return;
+            }
+
+            let seq = 0;
+            let fullReply = '';
+            let buffer = '';
+
+            ollamaRes.on('data', async (chunk) => {
+                console.log('[STREAM] DATA event fired, chunk size:', chunk.length, 'closed:', closed);
+                if (closed) {
+                    console.log('[STREAM] SKIPPING - client disconnected');
+                    return;
+                }
+
+                buffer += chunk.toString();
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                console.log('[STREAM] Buffer size:', buffer.length, 'Lines to process:', lines.length, 'First line preview:', lines[0]?.substring(0, 60));
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const json = JSON.parse(line);
+                        console.log('[STREAM] Parsed JSON:', JSON.stringify(json).substring(0, 150));
+                        if (json.message && json.message.content) {
+                            const token = json.message.content;
+                            console.log('[STREAM] Extracted token:', token.substring(0, 50));
+                            fullReply += token;
+                            await writeFrame({
+                                type: 'delta',
+                                conversation_id,
+                                seq: seq++,
+                                delta: token,
+                                ts: Date.now()
+                            });
+                        } else {
+                            console.log('[STREAM] No content in message, keys:', Object.keys(json));
+                        }
+                    } catch (e) {
+                        console.error('[STREAM] Parse error:', e.message, 'Line:', line.substring(0, 100));
+                    }
+                }
+            });
+
+            ollamaRes.on('end', async () => {
+                console.log('[STREAM] END event fired, fullReply length:', fullReply.length);
+                if (fullReply) {
+                    const assistantMsg = db.createMessage(conversation_id, req.user.id, 'assistant', fullReply);
+                    generateEmbedding(fullReply).then(emb => {
+                        if (emb) db.storeEmbedding(assistantMsg.id, emb);
+                    });
+                    db.updateConversationTimestamp(conversation_id);
+                }
+                await writeFrame({ type: 'done', conversation_id, ts: Date.now() });
+                res.end();
+            });
+
+            ollamaRes.on('error', async (err) => {
+                console.error('[STREAM] Response error:', err);
+                await writeFrame({ type: 'error', code: 'STREAM_ERROR', message: err.message });
+                res.end();
+            });
+        });
+
+        ollamaReq.on('error', async (err) => {
+            console.error('[STREAM] Request error:', err);
+            await writeFrame({ type: 'error', code: 'REQUEST_ERROR', message: err.message });
+            res.end();
+        });
+
+        console.log('[STREAM] Writing request body...');
+        ollamaReq.write(requestBody);
+        console.log('[STREAM] Ending request...');
+        ollamaReq.end();
+        console.log('[STREAM] Request sent to Ollama.');
+
+    } catch (err) {
+        console.error('[STREAM] Fatal error:', err);
+        await writeFrame({ type: 'error', code: 'FATAL_ERROR', message: err.message });
+        res.end();
     }
 });
 

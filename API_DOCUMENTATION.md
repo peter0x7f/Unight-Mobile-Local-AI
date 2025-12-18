@@ -595,6 +595,82 @@ curl -X POST http://127.0.0.1:8000/api/chat \
 
 ---
 
+### POST /api/chat/stream
+
+Stream generated output to the client using NDJSON over HTTP/1.1. This endpoint provides real-time token streaming with backpressure handling.
+
+**Endpoint:** `POST /api/chat/stream`
+
+**Authentication Required:** Yes
+
+**Request Headers:**
+```
+Content-Type: application/json
+Authorization: Bearer <token>
+```
+
+**Request Body:**
+```json
+{
+  "conversation_id": "uuid",
+  "message": "string",
+  "model": "string (optional)"
+}
+```
+
+**Response Headers:**
+```
+Content-Type: application/x-ndjson; charset=utf-8
+Cache-Control: no-cache, no-transform
+Connection: keep-alive
+X-Accel-Buffering: no
+```
+
+**Response Format (NDJSON):**
+The server sends a sequence of JSON objects, each followed by a newline character (`\n`).
+
+**Frame Types:**
+
+1. **Start Frame:**
+   ```json
+   { "type": "start", "conversation_id": "uuid", "ts": 1234567890 }
+   ```
+
+2. **Delta Frame (Token):**
+   ```json
+   { "type": "delta", "conversation_id": "uuid", "seq": 0, "delta": "Hello", "ts": 1234567890 }
+   ```
+
+3. **Done Frame:**
+   ```json
+   { "type": "done", "conversation_id": "uuid", "ts": 1234567890 }
+   ```
+
+4. **Error Frame:**
+   ```json
+   { "type": "error", "code": "ERROR_CODE", "message": "Description", "ts": 1234567890 }
+   ```
+
+**Example:**
+```bash
+curl -N -X POST http://127.0.0.1:8000/api/chat/stream \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conversation_id": "123e4567-e89b-12d3-a456-426614174000",
+    "message": "Count to 3"
+  }'
+```
+
+**Notes:**
+- **Backpressure:** The server respects client backpressure. If the client reads slowly, the server pauses generation.
+- **RAG:** Includes the same RAG capabilities as the non-streaming endpoint.
+- **Persistence:** User and assistant messages are saved to the database automatically.
+- **Client Handling:** Clients should parse each line as a separate JSON object.
+
+---
+
+
 ## Model Management
 
 ### GET /api/models/available

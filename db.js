@@ -82,6 +82,29 @@ function updateConversationTimestamp(id) {
     stmt.run(id);
 }
 
+function deleteConversation(id) {
+    // Delete in order: embeddings -> messages -> conversation
+    // Get message IDs first
+    const messageStmt = db.prepare('SELECT id FROM messages WHERE conversation_id = ?');
+    const messages = messageStmt.all(id);
+
+    // Delete embeddings
+    const deleteEmbeddingsStmt = db.prepare('DELETE FROM message_embeddings WHERE message_id = ?');
+    for (const msg of messages) {
+        deleteEmbeddingsStmt.run(msg.id);
+    }
+
+    // Delete messages
+    const deleteMessagesStmt = db.prepare('DELETE FROM messages WHERE conversation_id = ?');
+    deleteMessagesStmt.run(id);
+
+    // Delete conversation
+    const deleteConvStmt = db.prepare('DELETE FROM conversations WHERE id = ?');
+    const result = deleteConvStmt.run(id);
+
+    return result.changes > 0;
+}
+
 // Agent Helpers
 function createAgent(id, userId, name, type = 'orchestrator') {
     const stmt = db.prepare('INSERT INTO agents (id, user_id, name, type) VALUES (?, ?, ?, ?)');
@@ -193,6 +216,7 @@ module.exports = {
     getConversationById,
     getConversationsForUser,
     updateConversationTimestamp,
+    deleteConversation,
     createAgent,
     getAgentById,
     getAgentsForUser,

@@ -202,6 +202,43 @@ app.get('/api/conversations/:id/messages', (req, res) => {
     }
 });
 
+// Delete Conversation
+app.delete('/api/conversations/:id', (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // Verify ownership before deleting
+        const conversation = db.getConversationById(id);
+        if (!conversation) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+
+        if (conversation.user_id !== req.user.id) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+
+        // Delete conversation and all associated data
+        const deleted = db.deleteConversation(id);
+
+        if (deleted) {
+            res.json({
+                success: true,
+                message: 'Conversation deleted successfully',
+                conversation_id: id
+            });
+        } else {
+            res.status(500).json({ error: 'Failed to delete conversation' });
+        }
+    } catch (err) {
+        console.error('Delete conversation error:', err);
+        res.status(500).json({
+            error: 'Failed to delete conversation',
+            details: err.message
+        });
+    }
+});
+
+
 // Chat Endpoint - Refactored to match LocalModelService logic
 app.post('/api/chat', async (req, res) => {
     const { conversation_id, message, model } = req.body;
